@@ -184,6 +184,24 @@ Z：-2m ～ 2m
 
 导出的 Python 文件是可直接运行的脚本模板，内部会初始化 `GalbotMotion` 和 `GalbotRobot`，然后逐个调用 `motion.add_obstacle()`。
 
+## 🧹 SDK 障碍物管理脚本
+
+查询 Motion 中已加载的障碍物 ID：
+
+```bash
+python3 scripts/query_obstacles.py
+```
+
+交互式循环删除障碍物：
+
+```bash
+python3 scripts/delete_obstacle.py
+```
+
+可以输入列表序号或完整 ID。删除后会继续显示剩余障碍物；输入 `q` 退出，输入 `all` 删除全部非默认障碍物。
+
+`ground` 是 Motion 默认地面碰撞体，脚本会标记并保留它。
+
 ## ❓ 常见问题
 
 ### Qt 无法加载 xcb 平台插件
