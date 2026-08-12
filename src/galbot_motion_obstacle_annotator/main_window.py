@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +31,7 @@ from vtkmodules.vtkRenderingCore import vtkPointPicker
 
 from .exporters import export_json, export_python
 from .geometry import compose_pose, matrix_to_rpy
+from .importers import load_json as load_obstacles_json
 from .models import SUPPORTED_OBSTACLE_TYPES, Obstacle
 from .pcd import load_pcd
 from .robot_model import RobotVisual, load_urdf_visuals
@@ -66,6 +68,7 @@ class MainWindow(QMainWindow):
         self.resize(1550, 950)
 
         self.point_cloud_path = ""
+        self.obstacles_json_path = ""
         self.full_point_cloud: pv.PolyData | None = None
         self.point_cloud: pv.PolyData | None = None
         self.obstacles: list[Obstacle] = []
@@ -122,6 +125,7 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("文件")
         actions = [
             ("打开点云", self.open_point_cloud),
+            ("打开 JSON", self.open_json),
             ("加载机器人 URDF", self.browse_robot_model),
             ("导出 JSON", self.save_json),
             ("导出 Python", self.save_python),
@@ -137,7 +141,10 @@ class MainWindow(QMainWindow):
 
         open_button = QPushButton("打开 PCD")
         open_button.clicked.connect(self.open_point_cloud)
+        json_button = QPushButton("打开 JSON")
+        json_button.clicked.connect(self.open_json)
         layout.addWidget(open_button)
+        layout.addWidget(json_button)
         layout.addWidget(self._build_filter_group())
         layout.addWidget(self._build_selection_group())
         layout.addWidget(self._build_obstacle_group())
@@ -329,6 +336,11 @@ class MainWindow(QMainWindow):
         if path:
             self.load_point_cloud(path)
 
+    def open_json(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "打开 JSON", "", "JSON (*.json)")
+        if path:
+            self.load_json(path)
+
     def load_point_cloud(self, path: str) -> None:
         try:
             if Path(path).suffix.lower() == ".pcd":
@@ -344,6 +356,20 @@ class MainWindow(QMainWindow):
         self.point_cloud_path = str(Path(path).resolve())
         self.full_point_cloud = geometry
         self.apply_point_cloud_filter(reset_camera=True)
+
+    def load_json(self, path: str) -> None:
+        try:
+            obstacles, source_point_cloud = load_obstacles_json(path)
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
+            QMessageBox.critical(self, "JSON 加载失败", str(error))
+            return
+
+        self.obstacles = obstacles
+        self.obstacles_json_path = str(Path(path).resolve())
+        if source_point_cloud and not self.point_cloud_path:
+            self.point_cloud_path = source_point_cloud
+        self._refresh_list(0 if self.obstacles else -1)
+        self.statusBar().showMessage(f"已加载 JSON：{Path(path).name}，共 {len(self.obstacles)} 个碰撞体")
 
     def apply_point_cloud_filter(self, reset_camera: bool = True) -> None:
         if self.full_point_cloud is None:
@@ -847,9 +873,12 @@ class MainWindow(QMainWindow):
     def save_json(self) -> None:
         if not self._validate_export():
             return
-        path, _ = QFileDialog.getSaveFileName(self, "导出 JSON", "obstacles.json", "JSON (*.json)")
+        default_name = Path(self.obstacles_json_path).name if self.obstacles_json_path else "obstacles.json"
+        initial = self.obstacles_json_path or default_name
+        path, _ = QFileDialog.getSaveFileName(self, "导出 JSON", initial, "JSON (*.json)")
         if path:
             export_json(path, self.obstacles, self.point_cloud_path)
+            self.obstacles_json_path = str(Path(path).resolve())
             self.statusBar().showMessage(f"已导出：{path}")
 
     def save_python(self) -> None:
