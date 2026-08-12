@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+*.pcd
+!tests/data/*.pcd
+*.json
+*.generated.py
+add_annotated_obstacles.py
+galbot_one_golf_description/
