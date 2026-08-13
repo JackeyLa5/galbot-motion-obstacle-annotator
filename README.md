@@ -17,9 +17,18 @@ Galbot Motion Obstacle Annotator 是一个基于 PySide6、PyVista 和 VTK 的�
 - 导出可直接运行、结构参考 `add_obstacle.py` 的 Galbot Motion 障碍物添加 Python 脚本
 - 显示世界坐标轴和点云边界
 
-## ⚙️ 安装
+## ⚙️ 安装与校验
 
-推荐使用 Python 3.10 或更新版本，并统一使用 `uv`：
+推荐使用 Python 3.10 或更新版本，并统一使用 `uv` 管理环境。
+
+### 1. 下载项目
+
+```bash
+git clone https://github.com/JackeyLa5/galbot-motion-obstacle-annotator.git
+cd galbot-motion-obstacle-annotator
+```
+
+### 2. 安装依赖
 
 ```bash
 uv sync --dev
@@ -31,47 +40,68 @@ Ubuntu 使用 Qt 6/X11 时，还需要安装光标运行库：
 sudo apt-get install libxcb-cursor0
 ```
 
+### 3. 使用测试点云快速校验
+
+仓库已经提供可直接使用的室内测试点云：
+
+```bash
+uv run galbot-motion-obstacle-annotator tests/data/test.pcd
+```
+
+正常情况下会打开标注界面，并显示餐桌、餐椅、沙发、茶几、矮柜、纸箱、垃圾桶、圆凳、盆栽、落地灯和行李箱等常见物体。世界原点附近预留了机器人活动空间，点云中不会额外放置机器人。
+
+可以使用该场景快速检查：
+
+- 点云是否正常加载、过滤和按高度着色。
+- 鼠标右键是否能够选取点云中的点。
+- Box、Sphere 和 Cylinder 是否能够正常拟合和编辑。
+- JSON 和 Python 脚本是否能够正常导出。
+
+测试点云由 `tools/generate_test_pcd.py` 确定性生成。如需重新生成：
+
+```bash
+python3 tools/generate_test_pcd.py
+```
+
 ## 🚀 快速开始
 
-1. 下载机器人模型资产：
+完成安装和测试点云校验后，可以按照以下步骤加载真实机器人模型和地图点云并开始标注。
+
+### 1. 准备机器人模型
 
 ```bash
 git clone https://github.com/GalaxyGeneralRobotics/galbot_one_golf_description.git
 ```
 
-建议将 `galbot_one_golf_description` 放在当前项目根目录下，这样程序会自动查找：
+建议将 `galbot_one_golf_description` 放在当前项目根目录下，程序会自动查找：
 
 ```text
 ./galbot_one_golf_description/urdf/galbot_one_golf.urdf
 ```
 
-2. 从机器人下载当前地图点云：
+也可以在界面中手动选择其他 URDF 文件或机器人模型目录。
+
+### 2. 下载地图点云
 
 ```bash
 scp galbot@robot_ip:/var/maps/cur/global_cloud_cleaned.pcd ./
 ```
 
-3. 在本地安装依赖：
-
-```bash
-uv sync --dev
-```
-
-4. 启动标注工具：
+### 3. 启动标注工具
 
 ```bash
 uv run galbot-motion-obstacle-annotator global_cloud_cleaned.pcd
 ```
 
-或：
+也可以使用模块入口启动：
 
 ```bash
 uv run python -m galbot_motion_obstacle_annotator.app global_cloud_cleaned.pcd
 ```
 
-5. 开始标注：
+### 4. 开始标注
 
-1. 选择碰撞体类型。Box 还可以选择 `AABB` 或 `OBB`。
+1. 选择碰撞体类型。
 2. 点击“开始逐点选择”，在点云上右键选择若干具有代表性的点。
 3. 可以从不同视角选择边界点，并使用“撤销一点”或“清空点”。
 4. 点击“生成碰撞体”，程序根据采样点拟合几何参数。
@@ -100,7 +130,7 @@ Galbot Motion SDK 本身还支持 `point_cloud` 和 `depth_image`，但标注工
 ## 🎯 碰撞体显示与选择
 
 - 碰撞体使用带边框的半透明实体显示，而不是仅显示线框。
-- 未选中碰撞体使用蓝色，透明度为 `0.28`。
+- 未选中 `box` 使用青蓝色，未选中 `sphere` 使用紫色，未选中 `cylinder` 使用绿色，透明度均为 `0.28`。
 - 当前选中碰撞体使用黄色，透明度为 `0.42`。
 - Box 选中时会额外显示三轴拖动、旋转和缩放控制柄。
 - 点击右侧“取消选中”后会清除当前列表选择，并移除当前变换控制柄；碰撞体本身仍以半透明实体保留在场景中。
@@ -120,7 +150,12 @@ Z：-2m ～ 2m
 
 - `XY 半范围`：机器人当前位置向 X/Y 正负方向延伸的距离。
 - `Z 最低/Z 最高`：点云绝对 Z 高度范围。
+- `点云颜色`：默认对所有已加载点云按 Z 高度使用柔和色图着色，也可以切换为低亮度单色显示。
+- `点大小`：调整点的屏幕尺寸，默认值为 `2.0`，大范围密集点云可适当调小。
+- `点云透明度`：调整点云整体透明度，默认值为 `0.72`，降低密集点叠加造成的过亮和模糊。
 - `应用显示过滤`：立即重新裁剪显示点云。
+
+颜色、点大小和透明度只会重绘当前显示区域，不会重新遍历和裁剪完整地图，因此可以在大型点云上实时调整。这套显示规则统一适用于 PCD、PLY、VTK 和 VTP，不依赖测试点云或文件自带颜色。
 
 过滤只影响显示和逐点选择，不会修改原始 `global_cloud_cleaned.pcd` 文件。
 

@@ -1,12 +1,14 @@
 import math
 
 import numpy as np
+import pytest
 
 from galbot_motion_obstacle_annotator.geometry import (
     compose_box_transform,
     compose_pose,
     decompose_box_transform,
 )
+from galbot_motion_obstacle_annotator.models import Obstacle
 
 
 def test_box_transform_round_trip():
@@ -28,3 +30,16 @@ def test_compose_identity_pose():
 
     np.testing.assert_allclose(matrix[:3, :3], np.eye(3))
     np.testing.assert_allclose(matrix[:3, 3], [1.0, 2.0, 3.0])
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"obstacle_id": "", "scale": np.ones(3)},
+        {"obstacle_id": "box", "target_frame": "", "scale": np.ones(3)},
+        {"obstacle_id": "box", "center": np.array([0.0, np.nan, 0.0])},
+    ],
+)
+def test_obstacle_rejects_invalid_metadata_and_values(kwargs):
+    with pytest.raises(ValueError):
+        Obstacle(**kwargs)

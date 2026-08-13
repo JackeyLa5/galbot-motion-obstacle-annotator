@@ -185,6 +185,24 @@ class MainWindow(QMainWindow):
         self.z_max_spin.setValue(2.0)
         form.addRow("Z 最低/m", self.z_min_spin)
         form.addRow("Z 最高/m", self.z_max_spin)
+
+        self.point_color_mode_combo = QComboBox()
+        self.point_color_mode_combo.addItems(["按高度着色", "柔和单色"])
+        self.point_color_mode_combo.currentIndexChanged.connect(self._render_point_cloud)
+        form.addRow("点云颜色", self.point_color_mode_combo)
+
+        self.point_size_spin = self._spin(1.0, 10.0, 0.5)
+        self.point_size_spin.setDecimals(1)
+        self.point_size_spin.setValue(2.0)
+        self.point_size_spin.valueChanged.connect(self._render_point_cloud)
+        form.addRow("点大小", self.point_size_spin)
+
+        self.point_opacity_spin = self._spin(0.1, 1.0, 0.05)
+        self.point_opacity_spin.setDecimals(2)
+        self.point_opacity_spin.setValue(0.72)
+        self.point_opacity_spin.valueChanged.connect(self._render_point_cloud)
+        form.addRow("点云透明度", self.point_opacity_spin)
+
         apply_button = QPushButton("应用显示过滤")
         apply_button.clicked.connect(self.apply_point_cloud_filter)
         form.addRow(apply_button)
@@ -391,25 +409,49 @@ class MainWindow(QMainWindow):
             & (points[:, 2] <= self.z_max_spin.value())
         )
         self.point_cloud = pv.PolyData(points[mask])
-        self.plotter.remove_actor("point_cloud", render=False)
-        if self.point_cloud.n_points:
-            self.plotter.add_mesh(
-                self.point_cloud,
-                name="point_cloud",
-                style="points",
-                color="#d8dee9",
-                point_size=3,
-                render_points_as_spheres=False,
-                pickable=True,
-            )
-        if reset_camera:
-            self.plotter.reset_camera()
-        self.plotter.render()
+        self._render_point_cloud(reset_camera=reset_camera)
         self.statusBar().showMessage(
             f"显示 {self.point_cloud.n_points:,}/{self.full_point_cloud.n_points:,} 个点；"
             f"XY 中心=({center_x:.2f}, {center_y:.2f})，半范围={half_range:.1f}m，"
             f"Z=[{self.z_min_spin.value():.1f}, {self.z_max_spin.value():.1f}]m"
         )
+
+    def _render_point_cloud(self, *_args, reset_camera: bool = False) -> None:
+        if self.point_cloud is None:
+            return
+        self.plotter.remove_actor("point_cloud", render=False)
+        if self.point_cloud.n_points:
+            mesh_options = {
+                "name": "point_cloud",
+                "style": "points",
+                "point_size": self.point_size_spin.value(),
+                "opacity": self.point_opacity_spin.value(),
+                "render_points_as_spheres": False,
+                "pickable": True,
+                "reset_camera": False,
+                "show_scalar_bar": False,
+            }
+            if self.point_color_mode_combo.currentIndex() == 0:
+                height = np.asarray(self.point_cloud.points[:, 2], dtype=float)
+                self.point_cloud["height"] = height
+                sample_step = max(1, len(height) // 100_000)
+                sampled_height = height[::sample_step]
+                lower, upper = np.percentile(sampled_height, (2.0, 98.0))
+                if upper - lower < 1e-6:
+                    lower, upper = float(height.min()), float(height.max() + 1e-6)
+                mesh_options.update(
+                    {
+                        "scalars": "height",
+                        "cmap": "viridis",
+                        "clim": (float(lower), float(upper)),
+                    }
+                )
+            else:
+                mesh_options["color"] = "#8394a7"
+            self.plotter.add_mesh(self.point_cloud, **mesh_options)
+        if reset_camera:
+            self.plotter.reset_camera()
+        self.plotter.render()
 
     def toggle_selection_mode(self) -> None:
         if self.selection_mode:
@@ -749,13 +791,19 @@ class MainWindow(QMainWindow):
         self.plotter.render()
 
     def _render_obstacles(self) -> None:
+        previous_actor_names = [f"obstacle_box_{index}" for index in self.obstacle_actors]
         self.obstacle_actors = {}
-        for index in range(max(len(self.obstacles), 1) + 10):
-            self.plotter.remove_actor(f"obstacle_box_{index}", render=False)
+        for actor_name in previous_actor_names:
+            self.plotter.remove_actor(actor_name, render=False)
+        type_colors = {
+            "box": "#22b8cf",
+            "sphere": "#b26be8",
+            "cylinder": "#72c472",
+        }
         for index, obstacle in enumerate(self.obstacles):
             geometry = self._widget_geometry(obstacle)
             selected = index == self.active_index
-            color = "#ffcc00" if selected else "#00d4ff"
+            color = "#ffcc00" if selected else type_colors[obstacle.obstacle_type]
             actor = self.plotter.add_mesh(
                 geometry,
                 name=f"obstacle_box_{index}",
@@ -868,6 +916,12 @@ class MainWindow(QMainWindow):
         if len(ids) != len(set(ids)):
             QMessageBox.warning(self, "名称重复", "碰撞体 obstacle_id 必须唯一。")
             return False
+        for obstacle in self.obstacles:
+            try:
+                obstacle.validate_for_motion()
+            except ValueError as error:
+                QMessageBox.warning(self, "碰撞体参数无效", f"{obstacle.obstacle_id}: {error}")
+                return False
         return True
 
     def save_json(self) -> None:

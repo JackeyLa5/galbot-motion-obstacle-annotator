@@ -15,6 +15,8 @@ def _vector(values, length: int) -> FloatArray:
     result = np.asarray(values, dtype=float)
     if result.shape != (length,):
         raise ValueError(f"Expected {length} values, got {result.shape}")
+    if not np.isfinite(result).all():
+        raise ValueError("Obstacle values must be finite")
     return result
 
 
@@ -30,11 +32,27 @@ class Obstacle:
     def __post_init__(self) -> None:
         if self.obstacle_type not in SUPPORTED_OBSTACLE_TYPES:
             raise ValueError(f"Unsupported obstacle type: {self.obstacle_type}")
+        if not isinstance(self.obstacle_id, str) or not self.obstacle_id.strip():
+            raise ValueError("Obstacle ID must be a non-empty string")
+        if not isinstance(self.target_frame, str) or not self.target_frame.strip():
+            raise ValueError("Target frame must be a non-empty string")
         self.center = _vector(self.center, 3)
         self.rpy = _vector(self.rpy, 3)
         self.scale = _vector(self.scale, 3)
         if np.any(self.scale < 0.0):
             raise ValueError("Obstacle scale values cannot be negative")
+
+    def validate_for_motion(self) -> None:
+        if self.obstacle_type == "box":
+            if np.any(self.scale <= 0.0):
+                raise ValueError("Box scale values must be greater than zero")
+            return
+        if self.obstacle_type == "sphere":
+            if self.scale[0] <= 0.0 or not np.allclose(self.scale[1:], 0.0):
+                raise ValueError("Sphere scale must be [radius, 0, 0] with a positive radius")
+            return
+        if self.scale[0] <= 0.0 or self.scale[1] <= 0.0 or not np.isclose(self.scale[2], 0.0):
+            raise ValueError("Cylinder scale must be [radius, height, 0] with positive radius and height")
 
     @property
     def transform(self) -> FloatArray:
