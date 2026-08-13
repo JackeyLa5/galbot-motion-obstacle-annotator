@@ -12,7 +12,8 @@ Galbot Motion Obstacle Annotator 是一个基于 PySide6、PyVista 和 VTK 的�
 - 鼠标拖动、旋转和缩放 3D Box
 - 精确编辑中心、RPY 和长宽高
 - 管理多个碰撞体
-- 加载 URDF 机器人模型并设置 7D 初始位姿
+- 加载 URDF 机器人模型并设置底盘位姿
+- 使用场景中的底盘 Gizmo 沿 X/Y 平移或绕 Z 轴旋转
 - 导出 Galbot JSON
 - 导出可直接运行、结构参考 `add_obstacle.py` 的 Galbot Motion 障碍物添加 Python 脚本
 - 显示世界坐标轴和点云边界
@@ -33,6 +34,14 @@ cd galbot-motion-obstacle-annotator
 ```bash
 uv sync --dev
 ```
+
+PyRoki 不是默认必需依赖。只有需要使用 PyRoki 规划器时，额外安装：
+
+```bash
+uv sync --extra pyroki
+```
+
+不使用 PyRoki 时不要加该参数，默认环境不会安装 JAX、JAXLS 等额外依赖。
 
 Ubuntu 使用 Qt 6/X11 时，还需要安装光标运行库：
 
@@ -175,7 +184,7 @@ Z：-2m ～ 2m
 [0, 0, 0, 0, 0, 0, 1]
 ```
 
-修改右侧位置和四元数后，点击“应用机器人位姿”。四元数会在应用时自动归一化。机器人模型设置为不可选取，因此不会干扰点云逐点选择。
+修改右侧位置和四元数后，点击“应用机器人位姿”。四元数会在应用时自动归一化。场景中的底盘 Gizmo 支持沿 X/Y 平移和绕 Z 轴旋转；鼠标释放后才同步机器人模型、点云显示中心和 Galbot Motion 的 `galbot_base_pose`，拖动过程中不会重复重建整机或过滤点云。底盘 Z、roll 和 pitch 保持不变。机器人模型设置为不可选取，因此不会干扰点云逐点选择。
 
 机器人默认关节姿态不是全零，而是采用适合场景标注的展开姿态：
 

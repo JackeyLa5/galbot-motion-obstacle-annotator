@@ -19,6 +19,8 @@ class RobotVisual:
     mesh: pv.PolyData
     transform: FloatArray
     texture: pv.Texture | None = None
+    link_name: str = ""
+    local_transform: FloatArray | None = None
 
 
 def _numbers(value: str | None, length: int, default: tuple[float, ...]) -> FloatArray:
@@ -171,6 +173,64 @@ def _geometry_meshes(geometry, description_dir: Path) -> list[tuple[pv.PolyData,
 def load_urdf_visuals(
     urdf_path: str | Path, joint_positions: dict[str, float] | None = None
 ) -> list[RobotVisual]:
+    robot, description_dir, links, child_joints, link_transforms = _load_urdf_tree(
+        urdf_path, joint_positions
+    )
+    return _visuals_for_links(links, link_transforms, description_dir, set(links))
+
+
+def load_tcp_gripper_visuals(
+    urdf_path: str | Path,
+    mount_link: str,
+    tcp_link: str,
+    joint_positions: dict[str, float] | None = None,
+    auxiliary_root_links: tuple[str, ...] = (),
+    excluded_links: tuple[str, ...] = (),
+) -> list[RobotVisual]:
+    _, description_dir, links, child_joints, link_transforms = _load_urdf_tree(
+        urdf_path, joint_positions
+    )
+    if mount_link not in links:
+        raise ValueError(f"URDF mount link does not exist: {mount_link}")
+    if tcp_link not in links:
+        raise ValueError(f"URDF TCP link does not exist: {tcp_link}")
+
+    descendant_links = {mount_link}
+    pending = [mount_link]
+    while pending:
+        parent = pending.pop()
+        for joint in child_joints.get(parent, []):
+            child = joint.find("child").attrib["link"]
+            if child not in descendant_links:
+                descendant_links.add(child)
+                pending.append(child)
+    if tcp_link not in descendant_links:
+        raise ValueError(f"URDF TCP link {tcp_link!r} is not below mount link {mount_link!r}")
+
+    for auxiliary_root in auxiliary_root_links:
+        if auxiliary_root not in links:
+            raise ValueError(f"URDF auxiliary link does not exist: {auxiliary_root}")
+        descendant_links.add(auxiliary_root)
+        pending = [auxiliary_root]
+        while pending:
+            parent = pending.pop()
+            for joint in child_joints.get(parent, []):
+                child = joint.find("child").attrib["link"]
+                if child not in descendant_links:
+                    descendant_links.add(child)
+                    pending.append(child)
+
+    tcp_inverse = np.linalg.inv(link_transforms[tcp_link])
+    local_transforms = {
+        link_name: tcp_inverse @ link_transforms[link_name] for link_name in descendant_links
+    }
+    included_links = descendant_links - set(excluded_links)
+    return _visuals_for_links(links, local_transforms, description_dir, included_links)
+
+
+def _load_urdf_tree(
+    urdf_path: str | Path, joint_positions: dict[str, float] | None
+):
     urdf_path = Path(urdf_path).resolve()
     description_dir = urdf_path.parent.parent
     robot = ElementTree.parse(urdf_path).getroot()
@@ -209,13 +269,26 @@ def load_urdf_visuals(
                 )
             pending.append((child, link_transform @ joint_transform))
 
+    return robot, description_dir, links, child_joints, link_transforms
+
+
+def _visuals_for_links(
+    links: dict,
+    link_transforms: dict[str, FloatArray],
+    description_dir: Path,
+    included_links: set[str],
+) -> list[RobotVisual]:
+
     visuals: list[RobotVisual] = []
     for link_name, link in links.items():
+        if link_name not in included_links:
+            continue
         for visual_index, visual in enumerate(link.findall("visual")):
             geometry = visual.find("geometry")
             if geometry is None:
                 continue
-            visual_transform = link_transforms[link_name] @ _origin(visual.find("origin"))
+            local_transform = _origin(visual.find("origin"))
+            visual_transform = link_transforms[link_name] @ local_transform
             for mesh_index, (mesh, texture) in enumerate(_geometry_meshes(geometry, description_dir)):
                 visuals.append(
                     RobotVisual(
@@ -223,6 +296,48 @@ def load_urdf_visuals(
                         mesh=mesh,
                         transform=visual_transform,
                         texture=texture,
+                        link_name=link_name,
+                        local_transform=local_transform,
                     )
                 )
     return visuals
+
+
+def load_urdf_link_transforms(
+    urdf_path: str | Path, joint_positions: dict[str, float] | None = None
+) -> dict[str, FloatArray]:
+    return _load_urdf_tree(urdf_path, joint_positions)[4]
+
+
+def load_urdf_actuated_joint_names(urdf_path: str | Path) -> tuple[str, ...]:
+    robot = ElementTree.parse(Path(urdf_path).resolve()).getroot()
+    return tuple(
+        joint.attrib["name"]
+        for joint in robot.findall("joint")
+        if joint.attrib.get("type") in {"revolute", "continuous", "prismatic"}
+        and joint.find("mimic") is None
+    )
+
+
+def load_urdf_joint_limits(urdf_path: str | Path) -> dict[str, tuple[float, float]]:
+    """Return slider/planner limits for non-mimic actuated URDF joints."""
+    robot = ElementTree.parse(Path(urdf_path).resolve()).getroot()
+    limits: dict[str, tuple[float, float]] = {}
+    for joint in robot.findall("joint"):
+        if joint.attrib.get("type") not in {"revolute", "continuous", "prismatic"}:
+            continue
+        if joint.find("mimic") is not None:
+            continue
+        name = joint.attrib["name"]
+        limit = joint.find("limit")
+        if joint.attrib.get("type") == "continuous":
+            lower, upper = -np.pi, np.pi
+        elif limit is None or limit.get("lower") is None or limit.get("upper") is None:
+            lower, upper = (-np.pi, np.pi) if joint.attrib.get("type") == "revolute" else (-1.0, 1.0)
+        else:
+            lower = float(limit.attrib["lower"])
+            upper = float(limit.attrib["upper"])
+        if not np.isfinite([lower, upper]).all() or lower >= upper:
+            raise ValueError(f"Invalid limits for URDF joint {name!r}: {lower}, {upper}")
+        limits[name] = (lower, upper)
+    return limits

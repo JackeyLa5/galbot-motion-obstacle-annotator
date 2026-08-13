@@ -24,12 +24,18 @@ dev = [
   "pytest>=8.0",
   "ruff>=0.6",
 ]
+pyroki = [
+  "pyroki @ git+https://github.com/chungmin99/pyroki.git",
+]
 
 [project.scripts]
 galbot-motion-obstacle-annotator = "galbot_motion_obstacle_annotator.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/galbot_motion_obstacle_annotator"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
