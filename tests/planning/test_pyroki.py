@@ -6,8 +6,10 @@ from galbot_motion_obstacle_annotator.models import Obstacle
 from galbot_motion_obstacle_annotator.planning.models import PlanRequest, PoseTarget
 from galbot_motion_obstacle_annotator.planning.pyroki import (
     PyrokiPlanner,
+    express_obstacles_in_base_frame,
     express_world_scene_in_base_frame,
     resolve_pyroki_urdf_path,
+    sample_reachable_positions_collision_aware,
 )
 from galbot_motion_obstacle_annotator.planning.registry import default_registry
 
@@ -81,6 +83,31 @@ def test_world_scene_is_expressed_relative_to_moved_robot_base():
     np.testing.assert_allclose(local_obstacles[0].scale, obstacle.scale)
 
 
+def test_express_obstacles_in_base_frame_matches_world_scene_conversion():
+    base_transform = np.array(
+        [
+            [0.0, -1.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0, 2.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
+    obstacle = Obstacle(
+        "table",
+        "box",
+        center=[2.0, 2.0, 0.4],
+        rpy=[0.0, 0.0, np.pi / 2.0],
+        scale=[1.0, 0.6, 0.8],
+    )
+
+    local_obstacles = express_obstacles_in_base_frame([obstacle], base_transform)
+
+    assert local_obstacles[0].target_frame == "base_link"
+    np.testing.assert_allclose(local_obstacles[0].center, [0.0, -1.0, 0.4], atol=1e-8)
+    np.testing.assert_allclose(local_obstacles[0].rpy, [0.0, 0.0, 0.0], atol=1e-8)
+    np.testing.assert_allclose(local_obstacles[0].scale, obstacle.scale)
+
+
 def test_pyroki_reports_missing_optional_dependencies():
     def missing_dependencies():
         raise ModuleNotFoundError("No module named 'pyroki'")
@@ -89,6 +116,28 @@ def test_pyroki_reports_missing_optional_dependencies():
 
     assert not available
     assert "PyRoki dependencies are unavailable" in message
+
+
+def test_sample_reachable_positions_collision_aware_reports_missing_dependencies():
+    def missing_dependencies():
+        raise ModuleNotFoundError("No module named 'pyroki'")
+
+    try:
+        sample_reachable_positions_collision_aware(
+            "robot.urdf",
+            tip_link="tip",
+            active_joint_names=("joint1",),
+            joint_limits={},
+            fixed_joint_positions={},
+            obstacles_base_frame=[],
+            sample_count=10,
+            rng=np.random.default_rng(0),
+            dependency_loader=missing_dependencies,
+        )
+    except RuntimeError as error:
+        assert "PyRoki dependencies are unavailable" in str(error)
+    else:
+        raise AssertionError("Expected missing PyRoki dependencies to raise RuntimeError")
 
 
 def test_pyroki_requires_an_existing_urdf(tmp_path):

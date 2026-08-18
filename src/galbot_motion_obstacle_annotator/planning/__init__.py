@@ -2,8 +2,8 @@
 
 from .models import JointTrajectory, PlanRequest, PlanResult, PoseTarget
 from .protocol import MotionPlannerPlugin, PlannerMetadata
-from .registry import PlannerRegistry, default_registry
 from .pyroki import PyrokiPlanner
+from .registry import PlannerRegistry, default_registry
 
 __all__ = [
     "JointTrajectory",

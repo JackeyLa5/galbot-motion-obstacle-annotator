@@ -44,3 +44,18 @@ testpaths = ["tests"]
 line-length = 110
 target-version = "py310"
 exclude = ["galbot_one_golf_description"]
+
+[tool.ruff.lint.per-file-ignores]
+# These catch arbitrary failures from an external SDK/JAX call and turn them
+# into a PlanResult/CLI error message, or do best-effort cleanup after a
+# planning failure — narrowing the exception type would mean guessing at
+# what a library we don't control can raise.
+"scripts/delete_obstacle.py" = ["BLE001"]
+"scripts/query_obstacles.py" = ["BLE001"]
+"src/galbot_motion_obstacle_annotator/planning/galbot_motion.py" = ["BLE001", "S110"]
+# These isinstance checks validate untrusted external input (parsed JSON,
+# caller-supplied `options` values), not an internal type contract, so they
+# intentionally raise ValueError; tests/test_exporters.py already pins that.
+"src/galbot_motion_obstacle_annotator/importers.py" = ["TRY004"]
+"src/galbot_motion_obstacle_annotator/exporters.py" = ["TRY004"]
+"src/galbot_motion_obstacle_annotator/planning/pyroki.py" = ["BLE001", "TRY004"]

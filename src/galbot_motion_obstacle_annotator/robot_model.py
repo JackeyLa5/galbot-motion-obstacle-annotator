@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree
@@ -173,7 +174,7 @@ def _geometry_meshes(geometry, description_dir: Path) -> list[tuple[pv.PolyData,
 def load_urdf_visuals(
     urdf_path: str | Path, joint_positions: dict[str, float] | None = None
 ) -> list[RobotVisual]:
-    robot, description_dir, links, child_joints, link_transforms = _load_urdf_tree(
+    _robot, description_dir, links, _child_joints, link_transforms = _load_urdf_tree(
         urdf_path, joint_positions
     )
     return _visuals_for_links(links, link_transforms, description_dir, set(links))
@@ -341,3 +342,79 @@ def load_urdf_joint_limits(urdf_path: str | Path) -> dict[str, tuple[float, floa
             raise ValueError(f"Invalid limits for URDF joint {name!r}: {lower}, {upper}")
         limits[name] = (lower, upper)
     return limits
+
+
+def sample_reachable_positions(
+    urdf_path: str | Path,
+    tip_link: str,
+    active_joint_names: tuple[str, ...],
+    joint_limits: dict[str, tuple[float, float]],
+    fixed_joint_positions: dict[str, float],
+    sample_count: int,
+    rng: np.random.Generator,
+) -> tuple[FloatArray, FloatArray]:
+    """Monte-Carlo sample ``tip_link`` positions reachable by varying only ``active_joint_names``.
+
+    All other joints stay fixed at ``fixed_joint_positions``. Positions are expressed
+    in the same frame as ``load_urdf_link_transforms`` (i.e. relative to the URDF root
+    link, typically ``base_link``). Returns ``(positions, active_joint_values)`` where
+    ``active_joint_values[i]`` is the ``active_joint_names``-ordered draw that produced
+    ``positions[i]`` -- enough to reconstruct the full arm pose for any sampled point.
+    """
+    if sample_count <= 0:
+        return np.empty((0, 3), dtype=float), np.empty((0, len(active_joint_names)), dtype=float)
+    positions = np.empty((sample_count, 3), dtype=float)
+    active_joint_values = np.empty((sample_count, len(active_joint_names)), dtype=float)
+    for index in range(sample_count):
+        joint_positions = dict(fixed_joint_positions)
+        for name in active_joint_names:
+            lower, upper = joint_limits.get(name, (-np.pi, np.pi))
+            joint_positions[name] = rng.uniform(lower, upper)
+        transforms = load_urdf_link_transforms(urdf_path, joint_positions)
+        if tip_link not in transforms:
+            raise ValueError(f"URDF tip link does not exist: {tip_link}")
+        positions[index] = transforms[tip_link][:3, 3]
+        active_joint_values[index] = [joint_positions[name] for name in active_joint_names]
+    return positions, active_joint_values
+
+
+def sample_until_valid(
+    draw_batch: Callable[[int], tuple[FloatArray, FloatArray, np.ndarray]],
+    sample_count: int,
+    batch_size: int,
+    max_attempts: int,
+) -> tuple[FloatArray, FloatArray, int, int]:
+    """Repeatedly call ``draw_batch`` until ``sample_count`` valid rows are collected.
+
+    ``draw_batch(n)`` must return ``(positions, joint_values, valid_mask)`` each of
+    length ``n``, where ``valid_mask`` is a boolean array. Rows where ``valid_mask`` is
+    ``False`` are discarded. Gives up after ``max_attempts`` batches even if short of
+    ``sample_count`` -- a pathologically constrained pose (e.g. mostly self-colliding)
+    must not loop forever. Returns ``(positions, joint_values, batches_drawn,
+    candidates_drawn)``: the first two are truncated to at most ``sample_count`` rows
+    (fewer if attempts were exhausted first); the last two are diagnostics for
+    reporting how much work was done.
+    """
+    if sample_count <= 0:
+        return np.empty((0, 3), dtype=float), np.empty((0, 0), dtype=float), 0, 0
+    collected_positions: list[FloatArray] = []
+    collected_joint_values: list[FloatArray] = []
+    collected = 0
+    candidates_drawn = 0
+    batches_drawn = 0
+    while collected < sample_count and batches_drawn < max_attempts:
+        positions, joint_values, valid_mask = draw_batch(batch_size)
+        valid_mask = np.asarray(valid_mask, dtype=bool)
+        candidates_drawn += len(valid_mask)
+        batches_drawn += 1
+        if np.any(valid_mask):
+            collected_positions.append(np.asarray(positions)[valid_mask])
+            collected_joint_values.append(np.asarray(joint_values)[valid_mask])
+            collected += int(np.sum(valid_mask))
+    if collected_positions:
+        positions_out = np.concatenate(collected_positions, axis=0)[:sample_count]
+        joint_values_out = np.concatenate(collected_joint_values, axis=0)[:sample_count]
+    else:
+        positions_out = np.empty((0, 3), dtype=float)
+        joint_values_out = np.empty((0, 0), dtype=float)
+    return positions_out, joint_values_out, batches_drawn, candidates_drawn

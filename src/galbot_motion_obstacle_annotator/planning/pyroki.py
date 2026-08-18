@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable, Mapping
 from importlib import import_module
 from importlib.util import find_spec
 from pathlib import Path
-from typing import Any, Callable, Mapping, Tuple, Union
+from typing import Any
 
 import numpy as np
 
 from ..geometry import matrix_to_quaternion, matrix_to_rpy, quaternion_to_matrix, rpy_to_matrix
 from ..models import Obstacle
+from ..robot_model import sample_until_valid
 from .models import JointTrajectory, PlanRequest, PlanResult, PoseTarget
 from .protocol import PlannerMetadata
 
-Solver = Callable[..., Union[np.ndarray, Tuple[np.ndarray, Mapping[str, Any]]]]
+Solver = Callable[..., np.ndarray | tuple[np.ndarray, Mapping[str, Any]]]
 
 
 def resolve_pyroki_urdf_path(path_like: str | Path) -> Path:
@@ -64,6 +66,19 @@ def express_world_scene_in_base_frame(
         frame_id=target.frame_id,
     )
 
+    return local_target, express_obstacles_in_base_frame(obstacles, base_transform)
+
+
+def express_obstacles_in_base_frame(
+    obstacles: list[Obstacle],
+    base_transform: np.ndarray,
+) -> list[Obstacle]:
+    """Express world-frame obstacles in ``base_link``."""
+    base_transform = np.asarray(base_transform, dtype=float)
+    if base_transform.shape != (4, 4) or not np.isfinite(base_transform).all():
+        raise ValueError("Robot base transform must be a finite 4x4 matrix")
+    world_to_base = np.linalg.inv(base_transform)
+
     local_obstacles: list[Obstacle] = []
     for obstacle in obstacles:
         if obstacle.target_frame != "world":
@@ -84,7 +99,33 @@ def express_world_scene_in_base_frame(
                 target_frame="base_link",
             )
         )
-    return local_target, local_obstacles
+    return local_obstacles
+
+
+def _pyroki_collision_geometry(pyroki: Any, obstacle: Obstacle) -> Any:
+    """Build a PyRoki collision primitive for one ``base_link``-frame obstacle."""
+    obstacle.validate_for_motion()
+    if obstacle.target_frame != "base_link":
+        raise ValueError(f"PyRoki obstacle {obstacle.obstacle_id!r} must use target_frame='base_link'")
+    center = np.asarray(obstacle.center, dtype=float)
+    wxyz = PyrokiPlanner._xyzw_to_wxyz(matrix_to_quaternion(rpy_to_matrix(*obstacle.rpy)))
+    if obstacle.obstacle_type == "box":
+        return pyroki.collision.Box.from_extent(
+            extent=np.asarray(obstacle.scale, dtype=float),
+            position=center,
+            wxyz=wxyz,
+        )
+    if obstacle.obstacle_type == "sphere":
+        return pyroki.collision.Sphere.from_center_and_radius(
+            center=center,
+            radius=np.asarray(obstacle.scale[0]),
+        )
+    return pyroki.collision.Capsule.from_radius_height(
+        radius=np.asarray(obstacle.scale[0]),
+        height=np.asarray(obstacle.scale[1]),
+        position=center,
+        wxyz=wxyz,
+    )
 
 
 class PyrokiPlanner:
@@ -588,42 +629,7 @@ class PyrokiPlanner:
 
     @staticmethod
     def _world_collision(pyroki: Any, request: PlanRequest) -> list[Any]:
-        collisions = []
-        for obstacle in request.obstacles:
-            obstacle.validate_for_motion()
-            if obstacle.target_frame != "base_link":
-                raise ValueError(
-                    f"PyRoki obstacle {obstacle.obstacle_id!r} must use target_frame='base_link'"
-                )
-            center = np.asarray(obstacle.center, dtype=float)
-            wxyz = PyrokiPlanner._xyzw_to_wxyz(
-                matrix_to_quaternion(rpy_to_matrix(*obstacle.rpy))
-            )
-            if obstacle.obstacle_type == "box":
-                collisions.append(
-                    pyroki.collision.Box.from_extent(
-                        extent=np.asarray(obstacle.scale, dtype=float),
-                        position=center,
-                        wxyz=wxyz,
-                    )
-                )
-            elif obstacle.obstacle_type == "sphere":
-                collisions.append(
-                    pyroki.collision.Sphere.from_center_and_radius(
-                        center=center,
-                        radius=np.asarray(obstacle.scale[0]),
-                    )
-                )
-            else:
-                collisions.append(
-                    pyroki.collision.Capsule.from_radius_height(
-                        radius=np.asarray(obstacle.scale[0]),
-                        height=np.asarray(obstacle.scale[1]),
-                        position=center,
-                        wxyz=wxyz,
-                    )
-                )
-        return collisions
+        return [_pyroki_collision_geometry(pyroki, obstacle) for obstacle in request.obstacles]
 
     @staticmethod
     def _target_errors(
@@ -647,3 +653,99 @@ class PyrokiPlanner:
     def _xyzw_to_wxyz(quaternion: np.ndarray) -> np.ndarray:
         quaternion = np.asarray(quaternion, dtype=float)
         return quaternion[[3, 0, 1, 2]]
+
+
+def sample_reachable_positions_collision_aware(
+    urdf_path: str | Path,
+    tip_link: str,
+    active_joint_names: tuple[str, ...],
+    joint_limits: dict[str, tuple[float, float]],
+    fixed_joint_positions: dict[str, float],
+    obstacles_base_frame: list[Obstacle],
+    sample_count: int,
+    rng: np.random.Generator,
+    dependency_loader: Callable[[], dict[str, Any]] | None = None,
+    self_collision_margin: float = 0.0,
+    obstacle_collision_margin: float = 0.03,
+    batch_size: int = 512,
+    max_attempts: int = 60,
+) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
+    """Monte-Carlo sample ``tip_link`` positions reachable without self- or obstacle collision.
+
+    Unlike ``robot_model.sample_reachable_positions``, this rejects candidates that
+    self-collide or collide with ``obstacles_base_frame`` (already expressed in
+    ``base_link``, e.g. via ``express_obstacles_in_base_frame``). Self-collision is
+    calibrated against the *current* configuration (``fixed_joint_positions`` at the
+    active joints' present values): pairs already touching/overlapping there (common
+    for structurally-adjacent links even at a "normal" pose) are treated as inherent
+    and excluded, so only pairs that start clear and then cross ``self_collision_margin``
+    count as a new collision. Returns ``(positions, active_joint_values, diagnostics)``
+    where ``diagnostics`` has ``batches_drawn``, ``candidates_drawn``, and
+    ``valid_found`` (may be less than ``sample_count`` if ``max_attempts`` is exhausted
+    first -- a genuinely constrained pose must not loop forever).
+    """
+    try:
+        dependencies = (dependency_loader or PyrokiPlanner._load_dependencies)()
+    except (ImportError, ModuleNotFoundError) as error:
+        raise RuntimeError(f"PyRoki dependencies are unavailable: {error}") from error
+
+    jax = dependencies["jax"]
+    jnp = dependencies["jnp"]
+    pyroki = dependencies["pyroki"]
+    yourdfpy = dependencies["yourdfpy"]
+
+    urdf = yourdfpy.URDF.load(str(urdf_path))
+    robot = pyroki.Robot.from_urdf(urdf)
+    robot_collision = pyroki.collision.RobotCollision.from_urdf(urdf)
+    joint_names = tuple(str(name) for name in robot.joints.actuated_names)
+
+    if tip_link not in robot.links.names:
+        raise ValueError(f"URDF tip link does not exist: {tip_link}")
+    tip_link_index = robot.links.names.index(tip_link)
+    unknown_active = sorted(set(active_joint_names) - set(joint_names))
+    if unknown_active:
+        raise ValueError(f"Unknown active joint names: {unknown_active}")
+
+    active_indices = [joint_names.index(name) for name in active_joint_names]
+    fixed_vec = np.array([fixed_joint_positions.get(name, 0.0) for name in joint_names], dtype=float)
+
+    reference_distances = np.asarray(
+        robot_collision.compute_self_collision_distance(robot, jnp.asarray(fixed_vec[None]))
+    )[0]
+    self_pair_mask = reference_distances >= self_collision_margin
+    has_self_pairs = bool(np.any(self_pair_mask))
+
+    obstacle_geoms = [_pyroki_collision_geometry(pyroki, obstacle) for obstacle in obstacles_base_frame]
+
+    def draw_batch(n: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        cfg = np.tile(fixed_vec, (n, 1))
+        for index, name in zip(active_indices, active_joint_names):
+            lower, upper = joint_limits.get(name, (-np.pi, np.pi))
+            cfg[:, index] = rng.uniform(lower, upper, size=n)
+        cfg_j = jnp.asarray(cfg)
+
+        fk = robot.forward_kinematics(cfg_j)
+        positions = np.asarray(fk[:, tip_link_index, 4:])
+
+        valid = np.ones(n, dtype=bool)
+        if has_self_pairs:
+            distances = np.asarray(robot_collision.compute_self_collision_distance(robot, cfg_j))
+            valid &= np.min(distances[:, self_pair_mask], axis=-1) >= self_collision_margin
+        if obstacle_geoms:
+            coll = robot_collision.at_config(robot, cfg_j)
+            for geom in obstacle_geoms:
+                batched_geom = jax.tree.map(lambda value: value[None, None], geom)
+                geom_distances = np.asarray(pyroki.collision.collide(coll, batched_geom))
+                valid &= np.min(geom_distances, axis=-1) >= obstacle_collision_margin
+
+        return positions, cfg[:, active_indices], valid
+
+    positions, active_joint_values, batches_drawn, candidates_drawn = sample_until_valid(
+        draw_batch, sample_count, batch_size, max_attempts
+    )
+    diagnostics = {
+        "batches_drawn": batches_drawn,
+        "candidates_drawn": candidates_drawn,
+        "valid_found": len(positions),
+    }
+    return positions, active_joint_values, diagnostics

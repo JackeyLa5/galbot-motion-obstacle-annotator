@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Mapping
 
 import numpy as np
-
 
 LEG_JOINT_NAMES = tuple(f"leg_joint{index}" for index in range(1, 6))
 HEAD_JOINT_NAMES = tuple(f"head_joint{index}" for index in range(1, 3))
