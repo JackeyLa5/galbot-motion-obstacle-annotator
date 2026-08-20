@@ -4,11 +4,26 @@
 
 ## [未发布]
 
-工作区未提交的改动（`feat/arm_workspace` 分支）。让可插拔规划架构里的 Galbot Motion 规划器真正可用：
+工作区未提交的改动（`feat/arm_workspace` 分支）。相机导航与视觉打磨：
 
 ### 新增
+- `Alt` + 鼠标左键拖动：绕光标下的点环绕旋转视角（Isaac Sim / Maya 风格），取代之前那种绕焦点旋转、体验很差的默认左键拖动；不按 `Alt` 的左键继续留给拾取/拖动障碍物、机器人底盘和 TCP gizmo。中键拖动平移、滚轮缩放不受影响。拾取环绕中心点依次尝试点云顶点拾取、网格面片拾取、prop 近似拾取，最后兜底为视线与当前对焦平面的交点，保证任何点击都有合理的旋转中心。
+- `geometry.py` 新增 `rotate_vector_around_axis` / `orbit_camera_frame` 纯数学函数（可脱离 Qt/VTK 单测），旋转数学在零角度时保证与起始相机状态完全一致，拖动瞬间不会有画面跳变。
+
+### 修复
+- 碰撞体的仿射变换 gizmo（`add_affine_transform_widget` 的 arrows/circles）此前只是"顺带"能用，靠的是未加区分的兜底转发；现在显式识别这些 actor，和机器人/TCP gizmo 一样有明确的事件路径。
+
+### 视觉
+- Qt 界面字体改为显式字体栈（Ubuntu 优先，中文回退 Noto Sans CJK SC），此前完全依赖系统默认字体。
+- 折叠分组标题去掉了和 ▾/▸ 箭头重复的复选框图标（点击标题文字本身即可折叠，交互未变）；按钮、输入框、列表圆角统一调大，间距更松。
+- 新增 `danger` 按钮样式（红色描边），碰撞体「删除」按钮改用该样式，和其余中性操作区分开。
+- 3D 视图和右侧控制面板之间的分隔条从不可见（宽度 0）改为可见、可拖动调整宽度的细线。
+
+## [1901faa] - 2026-08-20 — 让 Galbot Motion 规划器真正可用
+
 - `compare_planners`：新增「对比 PyRoki / Galbot Motion」按钮，用同一个 TCP 目标分别跑两个规划器，叠加显示两条末端路径（青色 PyRoki / 橙色 Galbot Motion），用于判断 Galbot Motion 自身规划器是否也认为该目标可达。
 - `scripts/set_embosa_robot.py` + `config/embosa_robots.json`：一键切换 embosa（Galbot SDK 通信层）指向的机器人 IP，替代手动 `sudo vi` 系统文件 `/data/config/embosa_ip_config.json`。
+- 修复 TCP gizmo 拖拽/旋转跟随末端执行器自身局部坐标系（此前的重映射方式在某些角度下会有位移误差）。
 
 ## [837623e] - 2026-08-18 — 可达工作空间可视化与 UI 重构
 

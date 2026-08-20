@@ -56,7 +56,9 @@ def main() -> int:
     content = json.dumps(payload, indent=4) + "\n"
 
     print(f"Writing {TARGET} for robot '{args.robot}':\n{content}")
-    result = subprocess.run(["sudo", "tee", str(TARGET)], input=content, text=True, stdout=subprocess.DEVNULL)
+    result = subprocess.run(
+        ["sudo", "tee", str(TARGET)], input=content, text=True, stdout=subprocess.DEVNULL, check=False
+    )
     if result.returncode != 0:
         print("[ERROR] Failed to write config (sudo failed or was cancelled)", file=sys.stderr)
         return 1

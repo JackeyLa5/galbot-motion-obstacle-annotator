@@ -28,6 +28,7 @@ from ..planning.models import PlanRequest, PlanResult
 from ..planning.registry import default_registry
 from ..robot_model import RobotVisual
 from ..robot_state import INITIAL_ROBOT_JOINT_POSITIONS, RobotEnvironmentState
+from .camera import CameraMixin
 from .export import ExportMixin
 from .obstacles import ObstacleMixin
 from .plan_execution import PlanningMixin
@@ -42,6 +43,7 @@ from .workspace import WorkspaceMixin
 
 class MainWindow(
     QMainWindow,
+    CameraMixin,
     PointCloudMixin,
     SelectionMixin,
     ObstacleMixin,
@@ -140,6 +142,12 @@ class MainWindow(
         self.compare_unavailable: dict[str, str] = {}
         self.playback_timer = QTimer(self)
         self.playback_timer.timeout.connect(self._advance_playback)
+        self.camera_orbit_active = False
+        self.camera_orbit_pivot: np.ndarray | None = None
+        self.camera_orbit_start_position: np.ndarray | None = None
+        self.camera_orbit_start_focal: np.ndarray | None = None
+        self.camera_orbit_start_up: np.ndarray | None = None
+        self.camera_orbit_start_mouse: tuple[float, float] | None = None
 
         self.plotter = QtInteractor(self)
         self.plotter.interactor.installEventFilter(self)
@@ -205,7 +213,7 @@ class MainWindow(
         central_layout.addLayout(toggle_column)
 
         splitter = QSplitter(Qt.Horizontal)
-        splitter.setHandleWidth(0)
+        splitter.setHandleWidth(3)
         splitter.addWidget(self.plotter.interactor)
 
         scroll = QScrollArea()
@@ -350,6 +358,38 @@ class MainWindow(
         self.apply_form()
 
     def eventFilter(self, watched, event) -> bool:
+        if watched is self.plotter.interactor:
+            # Alt+left-drag orbits the camera around the point under the cursor
+            # (Isaac Sim / Maya style), ahead of every other mode below - Alt
+            # always means "navigate the camera" regardless of what's picked.
+            if (
+                event.type() == QEvent.MouseButtonPress
+                and event.button() == Qt.LeftButton
+                and bool(event.modifiers() & Qt.AltModifier)
+            ):
+                self._start_camera_orbit(event.position().x(), event.position().y())
+                return True
+            if event.type() == QEvent.MouseMove and self.camera_orbit_active:
+                self._update_camera_orbit(event.position().x(), event.position().y())
+                return True
+            if (
+                event.type() == QEvent.MouseButtonRelease
+                and event.button() == Qt.LeftButton
+                and self.camera_orbit_active
+            ):
+                self._end_camera_orbit()
+                return True
+        if watched is self.plotter.interactor and (
+            self.tcp_selection_mode or self.selection_mode or self.workspace_pick_mode
+        ):
+            # Same "plain left-drag never rotates" rule as normal mode, so
+            # camera behavior stays consistent while right-click sampling.
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                return True
+            if event.type() == QEvent.MouseMove and bool(event.buttons() & Qt.LeftButton):
+                return True
+            if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+                return True
         if watched is self.plotter.interactor and self.tcp_selection_mode:
             if event.type() == QEvent.MouseButtonPress and event.button() == Qt.RightButton:
                 self.pending_tcp_camera_state = self._camera_state()
@@ -432,7 +472,13 @@ class MainWindow(
                     self.finish_robot_base_move()
                 self.robot_mouse_capture = False
                 self.robot_mouse_camera_state = None
-                return super().eventFilter(watched, event)
+                if actor in self._obstacle_gizmo_actors():
+                    return super().eventFilter(watched, event)
+                # Anything else (empty space, the point cloud, obstacle/robot
+                # bodies) is a plain, non-Alt left-drag: consume it instead of
+                # falling through to VTK's default trackball rotate, which is
+                # reserved for Alt+left-drag (see the orbit handling above).
+                return True
             elif event.type() == QEvent.MouseMove and self.robot_drag_mode is not None:
                 self._drag_robot_base_in_local_frame(event.position().x(), event.position().y())
                 return True

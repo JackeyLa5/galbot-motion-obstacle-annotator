@@ -31,6 +31,7 @@ class ObstacleMixin:
         add_button = QPushButton("手动新建")
         add_button.clicked.connect(self.add_obstacle)
         delete_button = QPushButton("删除")
+        delete_button.setProperty("cssClass", "danger")
         delete_button.clicked.connect(self.delete_obstacle)
         deselect_button = QPushButton("取消选中")
         deselect_button.clicked.connect(self.deselect_obstacle)
@@ -98,6 +99,14 @@ class ObstacleMixin:
         self.transform_widget.disable()
         self.transform_widget.remove()
         self.transform_widget = None
+
+    def _obstacle_gizmo_actors(self) -> tuple[object, ...]:
+        if self.transform_widget is None:
+            return ()
+        return (
+            *self.transform_widget._arrows,
+            *self.transform_widget._circles,
+        )
 
     def _refresh_list(self, selected_index: int = -1) -> None:
         self._destroy_transform_widget()

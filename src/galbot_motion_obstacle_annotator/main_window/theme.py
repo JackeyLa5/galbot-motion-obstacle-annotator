@@ -23,11 +23,29 @@ ACCENT_HOVER = "#6fe3d3"
 ACCENT_PRESSED = "#3bbfac"
 ACCENT_TEXT = "#0b1f1c"
 DANGER = "#ef476f"
+DANGER_HOVER = "#f47189"
+DANGER_PRESSED = "#d13a5c"
+DANGER_TEXT = "#2a0810"
+
+FONT_STACK = (
+    '"Inter", "Ubuntu", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", '
+    '"Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", sans-serif'
+)
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
     background: {BG_APP};
     color: {TEXT_PRIMARY};
+    font-family: {FONT_STACK};
+    font-size: 13px;
+}}
+
+QToolTip {{
+    background: {BG_CARD};
+    color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER_STRONG};
+    border-radius: 6px;
+    padding: 4px 8px;
 }}
 
 QScrollArea {{
@@ -41,9 +59,9 @@ QScrollArea > QWidget > QWidget {{
 QGroupBox {{
     background: {BG_CARD};
     border: 1px solid {BORDER};
-    border-radius: 8px;
-    margin-top: 14px;
-    padding: 14px 10px 10px 10px;
+    border-radius: 10px;
+    margin-top: 16px;
+    padding: 16px 12px 12px 12px;
     font-weight: 600;
 }}
 QGroupBox::title {{
@@ -53,17 +71,11 @@ QGroupBox::title {{
     padding: 0 4px;
     color: {TEXT_PRIMARY};
     background: transparent;
+    font-size: 13px;
 }}
 QGroupBox::indicator {{
-    width: 13px;
-    height: 13px;
-    border: 1px solid {BORDER_STRONG};
-    border-radius: 3px;
-    background: {BG_FIELD};
-}}
-QGroupBox::indicator:checked {{
-    background: {ACCENT};
-    border-color: {ACCENT};
+    width: 0;
+    height: 0;
 }}
 
 QLabel {{
@@ -75,8 +87,8 @@ QPushButton {{
     background: {BG_FIELD};
     color: {TEXT_PRIMARY};
     border: 1px solid {BORDER_STRONG};
-    border-radius: 6px;
-    padding: 6px 14px;
+    border-radius: 8px;
+    padding: 7px 16px;
 }}
 QPushButton:hover {{
     background: {BG_FIELD_HOVER};
@@ -113,12 +125,32 @@ QPushButton[cssClass="primary"]:disabled {{
     color: {TEXT_MUTED};
     border-color: {BORDER};
 }}
+QPushButton[cssClass="danger"] {{
+    background: transparent;
+    color: {DANGER};
+    border: 1px solid {DANGER};
+}}
+QPushButton[cssClass="danger"]:hover {{
+    background: {DANGER};
+    color: {DANGER_TEXT};
+    border-color: {DANGER_HOVER};
+}}
+QPushButton[cssClass="danger"]:pressed {{
+    background: {DANGER_PRESSED};
+    color: {DANGER_TEXT};
+    border-color: {DANGER_PRESSED};
+}}
+QPushButton[cssClass="danger"]:disabled {{
+    background: {BG_CARD};
+    color: {TEXT_MUTED};
+    border-color: {BORDER};
+}}
 
 QLineEdit, QAbstractSpinBox, QComboBox {{
     background: {BG_FIELD};
     color: {TEXT_PRIMARY};
     border: 1px solid {BORDER_STRONG};
-    border-radius: 6px;
+    border-radius: 7px;
     padding: 4px 8px;
     selection-background-color: {ACCENT};
     selection-color: {ACCENT_TEXT};
@@ -168,13 +200,13 @@ QListWidget {{
     background: {BG_FIELD};
     color: {TEXT_PRIMARY};
     border: 1px solid {BORDER};
-    border-radius: 6px;
-    padding: 2px;
+    border-radius: 8px;
+    padding: 3px;
     outline: 0;
 }}
 QListWidget::item {{
-    padding: 4px 6px;
-    border-radius: 4px;
+    padding: 5px 8px;
+    border-radius: 5px;
 }}
 QListWidget::item:hover {{
     background: {BG_FIELD_HOVER};
@@ -203,6 +235,16 @@ QSlider::handle:horizontal {{
     background: {TEXT_PRIMARY};
     border: 2px solid {ACCENT};
     border-radius: 7px;
+}}
+
+QSplitter::handle {{
+    background: {BORDER};
+}}
+QSplitter::handle:hover {{
+    background: {ACCENT};
+}}
+QSplitter::handle:horizontal {{
+    width: 3px;
 }}
 
 QScrollBar:vertical {{

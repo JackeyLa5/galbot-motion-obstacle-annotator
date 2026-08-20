@@ -98,6 +98,69 @@ def compose_box_transform(center: FloatArray, rpy: FloatArray, size: FloatArray)
     return matrix
 
 
+def rotate_vector_around_axis(vector: FloatArray, axis: FloatArray, angle_degrees: float) -> FloatArray:
+    """Rotate `vector` by `angle_degrees` around `axis` (Rodrigues' rotation formula)."""
+    vector = np.asarray(vector, dtype=float)
+    axis_norm = float(np.linalg.norm(axis))
+    if axis_norm < 1e-9 or abs(angle_degrees) < 1e-12:
+        return vector.copy()
+    axis = np.asarray(axis, dtype=float) / axis_norm
+    theta = math.radians(angle_degrees)
+    cos_theta, sin_theta = math.cos(theta), math.sin(theta)
+    return (
+        vector * cos_theta
+        + np.cross(axis, vector) * sin_theta
+        + axis * np.dot(axis, vector) * (1.0 - cos_theta)
+    )
+
+
+def orbit_camera_frame(
+    pivot: FloatArray,
+    position: FloatArray,
+    focal_point: FloatArray,
+    up: FloatArray,
+    azimuth_degrees: float,
+    elevation_degrees: float,
+    world_up: FloatArray | None = None,
+) -> tuple[FloatArray, FloatArray, FloatArray]:
+    """Orbit a camera frame (position/focal_point/up) rigidly around `pivot`.
+
+    Applies `azimuth_degrees` around `world_up` (turntable yaw) and then
+    `elevation_degrees` around the resulting local "right" axis (pitch), as a
+    single rotation of the whole (position, focal_point, up) frame relative
+    to `pivot`. At zero angles this returns the inputs unchanged, so a drag
+    gesture that starts at the current camera state has no visual jump -
+    unlike re-aiming focal_point at pivot before rotating, which would.
+    """
+    if world_up is None:
+        world_up = np.array([0.0, 0.0, 1.0])
+    pivot = np.asarray(pivot, dtype=float)
+    relative_position = np.asarray(position, dtype=float) - pivot
+    relative_focal = np.asarray(focal_point, dtype=float) - pivot
+    up = np.asarray(up, dtype=float)
+    up_norm = float(np.linalg.norm(up))
+    if up_norm > 1e-9:
+        up = up / up_norm
+
+    relative_position = rotate_vector_around_axis(relative_position, world_up, azimuth_degrees)
+    relative_focal = rotate_vector_around_axis(relative_focal, world_up, azimuth_degrees)
+    up = rotate_vector_around_axis(up, world_up, azimuth_degrees)
+
+    forward = relative_focal - relative_position
+    forward_norm = float(np.linalg.norm(forward))
+    if forward_norm > 1e-9:
+        forward = forward / forward_norm
+        right = np.cross(forward, up)
+        right_norm = float(np.linalg.norm(right))
+        if right_norm > 1e-9:
+            right = right / right_norm
+            relative_position = rotate_vector_around_axis(relative_position, right, elevation_degrees)
+            relative_focal = rotate_vector_around_axis(relative_focal, right, elevation_degrees)
+            up = rotate_vector_around_axis(up, right, elevation_degrees)
+
+    return pivot + relative_position, pivot + relative_focal, up
+
+
 def decompose_box_transform(matrix: FloatArray) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray]:
     center = matrix[:3, 3].copy()
     linear = matrix[:3, :3]

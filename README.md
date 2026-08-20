@@ -7,6 +7,7 @@ Galbot Motion Obstacle Annotator 是一个基于 PySide6、PyVista 和 VTK 的�
 - 加载从机器人导出的 `/var/maps/cur/global_cloud_cleaned.pcd`
 - 按机器人位置裁剪大范围点云，减少无效区域
 - 独立设置 XY 显示半范围以及 Z 最低/最高高度
+- `Alt` + 鼠标左键拖动绕光标下的点环绕旋转视角（类似 Isaac Sim / Maya），鼠标中键拖动平移，滚轮缩放；不按 `Alt` 的左键留给拾取/拖动物体
 - 鼠标右键逐点采样，不扫描整个视锥点云
 - 自动拟合 Box、Sphere 和 Cylinder
 - 鼠标拖动、旋转和缩放 3D Box
@@ -116,7 +117,7 @@ uv run python -m galbot_motion_obstacle_annotator.app global_cloud_cleaned.pcd
 4. 点击“生成碰撞体”，程序根据采样点拟合几何参数。
 5. 如有需要，再通过右侧表单或 Box 控制柄微调，最后导出 JSON 或 Python 脚本。
 
-逐点选择每次只执行一次点拾取，不再对几十万点执行矩形视锥选择，因此更适合大型建图 PCD。左键仍用于旋转视角，右键用于采样。Box 至少需要 2 点，Sphere 至少需要 2 点，Cylinder 至少需要 3 点。
+逐点选择每次只执行一次点拾取，不再对几十万点执行矩形视锥选择，因此更适合大型建图 PCD。`Alt` + 左键用于旋转视角，右键用于采样。Box 至少需要 2 点，Sphere 至少需要 2 点，Cylinder 至少需要 3 点。
 
 第一次采样点不会再创建新的 VTK Actor：红色采样点 Actor 在窗口初始化时已经建立，后续只更新点数据。
 
