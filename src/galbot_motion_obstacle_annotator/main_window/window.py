@@ -24,7 +24,7 @@ from pyvistaqt import QtInteractor
 from vtkmodules.vtkRenderingCore import vtkPropPicker
 
 from ..models import Obstacle
-from ..planning.models import PlanResult
+from ..planning.models import PlanRequest, PlanResult
 from ..planning.registry import default_registry
 from ..robot_model import RobotVisual
 from ..robot_state import INITIAL_ROBOT_JOINT_POSITIONS, RobotEnvironmentState
@@ -106,7 +106,6 @@ class MainWindow(
         self.tcp_gizmo_actor = None
         self.tcp_transform_widget = None
         self.tcp_transform_active = False
-        self.tcp_last_widget_matrix: np.ndarray | None = None
         self.tcp_pose_matrix = np.eye(4, dtype=float)
         self.tcp_pose_edit_mode = False
         self.tcp_selection_mode = False
@@ -133,6 +132,12 @@ class MainWindow(
         self.playback_joint_names: tuple[str, ...] = ()
         self.playback_joint_positions = np.empty((0, 0), dtype=float)
         self.playback_index = 0
+        self.compare_path_actor_names: set[str] = set()
+        self.compare_active = False
+        self.compare_queue: list[str] = []
+        self.compare_requests: dict[str, PlanRequest] = {}
+        self.compare_results: dict[str, PlanResult | None] = {}
+        self.compare_unavailable: dict[str, str] = {}
         self.playback_timer = QTimer(self)
         self.playback_timer.timeout.connect(self._advance_playback)
 

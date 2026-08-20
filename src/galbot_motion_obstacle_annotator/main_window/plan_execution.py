@@ -29,6 +29,7 @@ class PlanningMixin:
             self.replay_button.setEnabled(False)
             self.plan_status_label.setText("目标已变化，请重新规划")
         self.plotter.remove_actor("planned_tcp_path", render=False)
+        self._clear_compare_paths()
         if hasattr(self, "workspace_toggle_button") and self.workspace_points is not None:
             self._clear_reachable_workspace()
 
@@ -207,7 +208,133 @@ class PlanningMixin:
         if self.planner_worker is not None:
             self.planner_worker.deleteLater()
         self.planner_worker = None
-        self.plan_button.setEnabled(True)
+        if not self.compare_active:
+            self.plan_button.setEnabled(True)
+
+    def compare_planners(self) -> None:
+        """Plan the same TCP target with both PyRoki and Galbot Motion and overlay both paths.
+
+        Lets the user check whether Galbot Motion's own planner also finds the
+        target reachable, alongside PyRoki - not just visualize one planner's result.
+        """
+        if self.planner_worker is not None and self.planner_worker.isRunning():
+            return
+        if not self.tcp_target_selected:
+            QMessageBox.warning(self, "没有 TCP 目标", "请先选择抓取点或应用 TCP 姿态。")
+            return
+        self._clear_plan_result()
+        self.compare_requests = {}
+        self.compare_results = {}
+        self.compare_unavailable = {}
+        for planner_id in ("pyroki", "galbot-motion"):
+            planner = self.planner_registry.get(planner_id)
+            available, reason = planner.is_available()
+            if not available:
+                self.compare_unavailable[planner_id] = reason
+                continue
+            try:
+                self.compare_requests[planner_id] = self._build_plan_request(planner_id)
+            except ValueError as error:
+                self.compare_unavailable[planner_id] = str(error)
+        if not self.compare_requests:
+            QMessageBox.warning(self, "规划器不可用", "PyRoki 和 Galbot Motion 均不可用，无法对比。")
+            return
+        self.compare_queue = list(self.compare_requests)
+        self.compare_active = True
+        self.compare_button.setEnabled(False)
+        self.plan_button.setEnabled(False)
+        self.plan_status_label.setText("正在对比 PyRoki / Galbot Motion 规划……")
+        self._run_next_compare_plan()
+
+    def _run_next_compare_plan(self) -> None:
+        if not self.compare_queue:
+            self.compare_active = False
+            self.compare_button.setEnabled(True)
+            self.plan_button.setEnabled(True)
+            self._show_compare_results()
+            return
+        planner_id = self.compare_queue.pop(0)
+        planner = self.planner_registry.get(planner_id)
+        request = self.compare_requests[planner_id]
+        self._print_plan_request_debug(planner_id, request)
+        self.planner_worker = PlannerWorker(planner, request)
+        self.planner_worker.finished_with_result.connect(
+            lambda result, planner_id=planner_id: self.compare_results.__setitem__(planner_id, result)
+        )
+        self.planner_worker.finished.connect(self._planner_thread_finished)
+        self.planner_worker.finished.connect(self._run_next_compare_plan)
+        self.planner_worker.start()
+
+    def _show_compare_results(self) -> None:
+        self._clear_compare_paths()
+        colors = {"pyroki": "#00e5ff", "galbot-motion": "#ffb703"}
+        lines = []
+        for planner_id in ("pyroki", "galbot-motion"):
+            planner = self.planner_registry.get(planner_id)
+            name = planner.metadata.display_name
+            if planner_id in self.compare_unavailable:
+                lines.append(f"{name}: 不可用（{self.compare_unavailable[planner_id]}）")
+                continue
+            result = self.compare_results.get(planner_id)
+            if result is None:
+                lines.append(f"{name}: 未返回结果")
+                continue
+            self._print_plan_result_debug(result)
+            if not result.success:
+                lines.append(f"{name}: 不可达（{result.status}：{result.message or '规划器未返回可用轨迹'}）")
+                continue
+            trajectory = result.trajectories.get(self.tcp_arm_combo.currentText())
+            if trajectory is None:
+                lines.append(f"{name}: 规划成功，但没有当前手臂的轨迹")
+                continue
+            try:
+                tcp_points = self._compute_tcp_path_points(
+                    trajectory.positions, result.diagnostics, self.tcp_arm_combo.currentText()
+                )
+            except (OSError, RuntimeError, ValueError) as error:
+                lines.append(f"{name}: 可达，但可视化失败（{error}）")
+                continue
+            self._render_compare_path(planner_id, tcp_points, colors[planner_id])
+            elapsed = "" if result.planning_seconds is None else f"，耗时 {result.planning_seconds:.3f}s"
+            lines.append(f"{name}: 可达，{len(tcp_points)} 帧{elapsed}")
+        self.plan_status_label.setText("\n".join(lines))
+
+    def _compute_tcp_path_points(self, positions: np.ndarray, diagnostics, arm_name: str) -> np.ndarray:
+        robot_path = Path(self.robot_path_edit.text()).expanduser()
+        joint_names = diagnostics.get("joint_names")
+        if joint_names is None:
+            joint_names = ARM_JOINT_NAMES[arm_name]
+        joint_names = tuple(str(name) for name in joint_names)
+        if positions.shape[1] != len(joint_names):
+            raise ValueError("轨迹关节维度与关节名称数量不一致")
+        tcp_link = self.tcp_link_edit.text().strip()
+        tcp_points = []
+        for values in positions:
+            joint_positions = dict(self.robot_state.joint_positions)
+            joint_positions.update(zip(joint_names, values))
+            transforms = load_urdf_link_transforms(robot_path, joint_positions)
+            tcp_points.append((self.robot_base_transform @ transforms[tcp_link])[:3, 3])
+        return np.asarray(tcp_points, dtype=float)
+
+    def _render_compare_path(self, planner_id: str, tcp_points: np.ndarray, color: str) -> None:
+        if len(tcp_points) < 2:
+            return
+        actor_name = f"compare_tcp_path_{planner_id}"
+        self.plotter.add_mesh(
+            pv.lines_from_points(tcp_points),
+            name=actor_name,
+            color=color,
+            line_width=5,
+            pickable=False,
+            reset_camera=False,
+        )
+        self.compare_path_actor_names.add(actor_name)
+        self.plotter.render()
+
+    def _clear_compare_paths(self) -> None:
+        for actor_name in self.compare_path_actor_names:
+            self.plotter.remove_actor(actor_name, render=False)
+        self.compare_path_actor_names.clear()
 
     def _prepare_playback(self, positions: np.ndarray, diagnostics) -> None:
         robot_path = Path(self.robot_path_edit.text()).expanduser()

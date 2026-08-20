@@ -12,3 +12,4 @@ build/
 *.generated.py
 add_annotated_obstacles.py
 galbot_one_golf_description/
+third_party/galbot_sdk/

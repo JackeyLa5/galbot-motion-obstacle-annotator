@@ -93,6 +93,16 @@ class TcpMixin:
         plan_row.addWidget(self.play_button)
         plan_row.addWidget(self.replay_button)
         layout.addLayout(plan_row)
+        self.compare_button = QPushButton("对比 PyRoki / Galbot Motion")
+        self.compare_button.setToolTip(
+            "分别用 PyRoki 和 Galbot Motion 自身的规划器求解同一个 TCP 目标，"
+            "叠加显示两条末端路径，用于判断 Galbot Motion 自身是否也认为该目标可达。"
+        )
+        self.compare_button.clicked.connect(self.compare_planners)
+        layout.addWidget(self.compare_button)
+        compare_hint = QLabel("对比结果：青色 = PyRoki，橙色 = Galbot Motion")
+        compare_hint.setObjectName("sectionHint")
+        layout.addWidget(compare_hint)
         self.keep_final_pose_check = QCheckBox("播放结束后保留末帧姿态")
         self.keep_final_pose_check.setChecked(False)
         self.keep_final_pose_check.setToolTip("不勾选时播放结束仅为预览；勾选后会把末帧写回当前机器人关节状态。")
@@ -249,7 +259,6 @@ class TcpMixin:
         )
 
     def _destroy_tcp_transform_widget(self) -> None:
-        self.tcp_last_widget_matrix = None
         if self.tcp_transform_widget is None:
             if self.tcp_gizmo_actor is not None:
                 self.plotter.remove_actor("tcp_pose_gizmo", render=False)
@@ -266,11 +275,16 @@ class TcpMixin:
     def _tcp_gizmo_geometry() -> pv.PolyData:
         return pv.Box(bounds=(-0.2, 0.2, -0.2, 0.2, -0.2, 0.2))
 
-    def _sync_tcp_gizmo_visuals(self, transform: np.ndarray) -> None:
+    def _sync_tcp_gizmo_frame(self) -> None:
+        # pyvista's widget measures drags by projecting onto its stored
+        # `axes`, independent of the arrow/ring visuals; leaving `axes` at
+        # the world-frame default (while only visuals were rotated) could
+        # make a drag along a rotated local axis project to ~0 world motion.
         if self.tcp_transform_widget is None:
             return
-        for actor in (*self.tcp_transform_widget._arrows, *self.tcp_transform_widget._circles):
-            actor.user_matrix = transform
+        world_matrix = self._tcp_world_matrix()
+        self.tcp_transform_widget.origin = tuple(float(value) for value in world_matrix[:3, 3])
+        self.tcp_transform_widget.axes = world_matrix[:3, :3].T
 
     def _transform_tcp_widget_changed(self, matrix: np.ndarray) -> None:
         if self.updating_tcp_widget:
@@ -278,35 +292,12 @@ class TcpMixin:
         matrix = np.asarray(matrix, dtype=float)
         if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
             return
-        current_world_matrix = self._tcp_world_matrix()
-        # The gizmo widget always drags/rotates along its own fixed world axes;
-        # re-interpret those raw deltas as being along the TCP's own current
-        # axes (matching the visually re-oriented arrows/rings), not the
-        # robot base's or the world's axes.
-        current_rotation = current_world_matrix[:3, :3]
-
-        raw_world_matrix = matrix.copy()
-        raw_rotation = raw_world_matrix[:3, :3]
-        u, _, vh = np.linalg.svd(raw_rotation)
-        raw_world_matrix[:3, :3] = u @ vh
-        if self.tcp_last_widget_matrix is None:
-            self.tcp_last_widget_matrix = raw_world_matrix.copy()
-            return
-
-        previous_widget_matrix = self.tcp_last_widget_matrix
-        previous_widget_rotation = previous_widget_matrix[:3, :3]
-        raw_translation_delta = raw_world_matrix[:3, 3] - previous_widget_matrix[:3, 3]
-        mapped_world_translation = current_world_matrix[:3, 3] + current_rotation @ raw_translation_delta
-
-        raw_rotation_delta = raw_world_matrix[:3, :3] @ previous_widget_rotation.T
-        world_rotation_delta = current_rotation @ raw_rotation_delta @ current_rotation.T
-        mapped_world_rotation = world_rotation_delta @ current_world_matrix[:3, :3]
-        u, _, vh = np.linalg.svd(mapped_world_rotation)
-        mapped_world_rotation = u @ vh
-
-        world_matrix = np.eye(4, dtype=float)
-        world_matrix[:3, :3] = mapped_world_rotation
-        world_matrix[:3, 3] = mapped_world_translation
+        # With the widget's axes kept in sync with the TCP's own local frame
+        # (see _sync_tcp_gizmo_frame), the widget's user_matrix already *is*
+        # the new TCP world pose - no extra remapping needed.
+        world_matrix = matrix.copy()
+        u, _, vh = np.linalg.svd(world_matrix[:3, :3])
+        world_matrix[:3, :3] = u @ vh
         base_matrix = np.linalg.inv(self.robot_base_transform) @ world_matrix
         rotation = base_matrix[:3, :3]
         u, _, vh = np.linalg.svd(rotation)
@@ -334,10 +325,15 @@ class TcpMixin:
         if self.tcp_gizmo_actor is not None:
             self.updating_tcp_widget = True
             self.tcp_gizmo_actor.user_matrix = self._tcp_world_matrix()
-            self._sync_tcp_gizmo_visuals(self._tcp_world_matrix())
             self.updating_tcp_widget = False
-        self.tcp_last_widget_matrix = raw_world_matrix.copy()
         self._refresh_tcp_target_label()
+
+    def _transform_tcp_widget_released(self, matrix: np.ndarray) -> None:
+        self._transform_tcp_widget_changed(matrix)
+        # Only re-anchor origin/axes once the gesture ends: refreshing them
+        # mid-drag would change the axis a continuing drag is measured
+        # against and make the gizmo jump/jitter under the cursor.
+        self._sync_tcp_gizmo_frame()
 
     def _render_tcp_gripper(self) -> None:
         self._destroy_tcp_transform_widget()
@@ -395,13 +391,10 @@ class TcpMixin:
             origin=tuple(float(value) for value in self._tcp_world_matrix()[:3, 3]),
             scale=0.32,
             axes_colors=("#ef476f", "#06d6a0", "#118ab2"),
-            release_callback=self._transform_tcp_widget_changed,
+            axes=self._tcp_world_matrix()[:3, :3].T,
+            release_callback=self._transform_tcp_widget_released,
             interact_callback=self._transform_tcp_widget_changed,
         )
-        self.updating_tcp_widget = True
-        self._sync_tcp_gizmo_visuals(self._tcp_world_matrix())
-        self.updating_tcp_widget = False
-        self.tcp_last_widget_matrix = self._tcp_world_matrix().copy()
         self.tcp_transform_widget._actor_length *= 3.0
         self.plotter.render()
 

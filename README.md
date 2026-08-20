@@ -239,6 +239,19 @@ Z：-2m ～ 2m
 
 导出的 Python 文件是可直接运行的脚本模板，内部会初始化 `GalbotMotion` 和 `GalbotRobot`，然后逐个调用 `motion.add_obstacle()`。
 
+## 🌐 切换机器人 embosa 网络配置
+
+`GalbotMotion`（真实 SDK 规划器）通过 embosa 与跑在机器人 Orin/XCU 上的 `service_motion_plan` 服务通信，peer IP 读取自系统级文件 `/data/config/embosa_ip_config.json`；这个路径写死在 `libembosa.so` 里，SDK 本身不提供环境变量或参数覆盖。
+
+为了不用每次都手动 `sudo vi` 那个文件，已知机器人的 IP 记在本仓库的 `config/embosa_robots.json` 里（按机器人名分组，可持续增补），切换时跑：
+
+```bash
+python3 scripts/set_embosa_robot.py --list          # 查看已知机器人
+python3 scripts/set_embosa_robot.py <robot_name>     # 切换到该机器人（会 sudo 覆盖系统文件，需要密码）
+```
+
+新机器人直接在 `config/embosa_robots.json` 里加一条（`local_interface` 是这台 PC 在能连到该机器人时应使用的 IP，`peer_lists` 是机器人 Orin/XCU 的 IP）。
+
 ## 🧹 SDK 障碍物管理脚本
 
 查询 Motion 中已加载的障碍物 ID：
